@@ -795,8 +795,16 @@ mod platform {
 mod platform {
     use mio::Ready;
 
+    pub fn is_aio(_event: &Ready) -> bool {
+        false
+    }
+
     pub fn is_hup(_event: &Ready) -> bool {
         false
+    }
+
+    pub fn aio() -> Ready {
+        Ready::empty()
     }
 
     pub fn hup() -> Ready {
