@@ -91,6 +91,25 @@ impl<E: Evented> PollEvented<E> {
 }
 
 impl<E> PollEvented<E> {
+    /// Tests to see if this source has a complete AIO event
+    ///
+    /// If not, then `NotReady` will be returned and the current task will be
+    /// scheduled to receive a notification when the future is ready.  In other
+    /// words, this method is only safe to call from within the context of a
+    /// future's task, typically done in a `Future::poll` method.
+    pub fn poll_aio(&self) -> Async<()> {
+        if self.readiness.load(Ordering::SeqCst) & Aio as usize != 0 {
+            return Async::Ready(())
+        }
+        self.readiness.fetch_or(self.token.take_readiness(), Ordering::SeqCst);
+        if self.readiness.load(Ordering::SeqCst) & Aio as usize != 0 {
+            Async::Ready(())
+        } else {
+            self.token.schedule_aio(&self.handle);
+            Async::NotReady
+        }
+    }
+
     /// Tests to see if this source is ready to be read from or not.
     ///
     /// If this stream is not ready for a read then `NotReady` will be returned

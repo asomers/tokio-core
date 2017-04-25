@@ -107,10 +107,12 @@ pub struct Handle {
     inner: Weak<RefCell<Inner>>,
 }
 
+#[derive(Debug)]
 struct ScheduledIo {
     readiness: Arc<AtomicUsize>,
     reader: Option<Task>,
     writer: Option<Task>,
+    aio: Option<Task>,
 }
 
 struct ScheduledTask {
@@ -125,9 +127,11 @@ enum TimeoutState {
     Waiting(Task),
 }
 
+#[derive(Debug)]
 enum Direction {
     Read,
     Write,
+    Aio,
 }
 
 enum Message {
@@ -144,6 +148,7 @@ enum Message {
 enum Readiness {
     Readable = 1,
     Writable = 2,
+    Aio      = 4
 }
 
 const TOKEN_MESSAGES: mio::Token = mio::Token(0);
@@ -328,6 +333,7 @@ impl Core {
     fn dispatch_io(&mut self, token: usize, ready: mio::Ready) {
         let mut reader = None;
         let mut writer = None;
+        let mut aio = None;
         let mut inner = self.inner.borrow_mut();
         if let Some(io) = inner.io_dispatch.get_mut(token) {
             if ready.is_readable() || platform::is_hup(&ready) {
@@ -340,6 +346,11 @@ impl Core {
                 io.readiness.fetch_or(Readiness::Writable as usize,
                     Ordering::Relaxed);
             }
+            if platform::is_aio(&ready) {
+                aio = io.aio.take();
+                io.readiness.fetch_or(Readiness::Aio as usize,
+                    Ordering::Relaxed);
+            }
         }
         drop(inner);
         // TODO: don't notify the same task twice
@@ -348,6 +359,9 @@ impl Core {
         }
         if let Some(writer) = writer {
             self.notify_handle(writer);
+        }
+        if let Some(aio) = aio {
+            self.notify_handle(aio);
         }
     }
 
@@ -467,6 +481,7 @@ impl Inner {
             readiness: Arc::new(AtomicUsize::new(0)),
             reader: None,
             writer: None,
+            aio: None,
         };
         if self.io_dispatch.vacant_entry().is_none() {
             let amt = self.io_dispatch.len();
@@ -477,7 +492,8 @@ impl Inner {
                               mio::Token(TOKEN_START + entry.index() * 2),
                               mio::Ready::readable() |
                                 mio::Ready::writable() |
-                                platform::hup(),
+                                platform::hup() |
+                                platform::aio(),
                               mio::PollOpt::edge()));
         Ok((sched.readiness.clone(), entry.insert(sched).index()))
     }
@@ -498,6 +514,7 @@ impl Inner {
         let (slot, bit) = match dir {
             Direction::Read => (&mut sched.reader, Readiness::Readable as usize),
             Direction::Write => (&mut sched.writer, Readiness::Writable as usize),
+            Direction::Aio => (&mut sched.aio, Readiness::Aio as usize),
         };
         if sched.readiness.load(Ordering::SeqCst) & bit != 0 {
             *slot = None;
@@ -757,8 +774,16 @@ mod platform {
     use mio::Ready;
     use mio::unix::UnixReady;
 
+    pub fn is_aio(event: &Ready) -> bool {
+        UnixReady::from(*event).is_aio()
+    }
+
     pub fn is_hup(event: &Ready) -> bool {
         UnixReady::from(*event).is_hup()
+    }
+
+    pub fn aio() -> Ready {
+        UnixReady::aio().into()
     }
 
     pub fn hup() -> Ready {

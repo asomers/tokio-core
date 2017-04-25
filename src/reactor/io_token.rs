@@ -61,6 +61,12 @@ impl IoToken {
     }
 
     /// Schedule the current future task to receive a notification when the
+    /// corresponding I/O object's AIO operation is complete.
+    pub fn schedule_aio(&self, handle: &Remote) {
+        handle.send(Message::Schedule(self.token, task::park(), Direction::Aio));
+    }
+
+    /// Schedule the current future task to receive a notification when the
     /// corresponding I/O object is readable.
     ///
     /// Once an I/O object has been registered with the event loop through the
