@@ -18,6 +18,12 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use reactor::{Handle, Remote};
 use reactor::io_token::IoToken;
 
+struct PollEventedInner {
+    pub token: IoToken,
+    pub handle: Remote,
+    pub readiness: AtomicUsize,
+}
+
 /// A concrete implementation of a stream of readiness notifications for I/O
 /// objects that originates from an event loop.
 ///
@@ -64,9 +70,7 @@ use reactor::io_token::IoToken;
 /// method you want to also use `need_read` to signal blocking and you should
 /// otherwise probably avoid using two tasks on the same `PollEvented`.
 pub struct PollEvented<E> {
-    token: IoToken,
-    handle: Remote,
-    readiness: AtomicUsize,
+    i: PollEventedInner,
     io: E,
 }
 
@@ -86,9 +90,11 @@ impl<E: Evented> PollEvented<E> {
     /// when it's ready.
     pub fn new(io: E, handle: &Handle) -> io::Result<PollEvented<E>> {
         Ok(PollEvented {
-            token: try!(IoToken::new(&io, handle)),
-            handle: handle.remote().clone(),
-            readiness: AtomicUsize::new(0),
+            i: PollEventedInner {
+                token: try!(IoToken::new(&io, handle)),
+                handle: handle.remote().clone(),
+                readiness: AtomicUsize::new(0),
+            },
             io: io,
         })
     }
@@ -179,12 +185,12 @@ impl<E> PollEvented<E> {
     /// task.
     pub fn poll_ready(&self, mask: Ready) -> Async<Ready> {
         let bits = super::ready2usize(mask);
-        match self.readiness.load(Ordering::SeqCst) & bits {
+        match self.i.readiness.load(Ordering::SeqCst) & bits {
             0 => {}
             n => return Async::Ready(super::usize2ready(n)),
         }
-        self.readiness.fetch_or(self.token.take_readiness(), Ordering::SeqCst);
-        match self.readiness.load(Ordering::SeqCst) & bits {
+        self.i.readiness.fetch_or(self.i.token.take_readiness(), Ordering::SeqCst);
+        match self.i.readiness.load(Ordering::SeqCst) & bits {
             0 => {
                 if mask.is_writable() {
                     self.need_write();
@@ -222,8 +228,8 @@ impl<E> PollEvented<E> {
     /// task.
     pub fn need_read(&self) {
         let bits = super::ready2usize(super::read_ready());
-        self.readiness.fetch_and(!bits, Ordering::SeqCst);
-        self.token.schedule_read(&self.handle)
+        self.i.readiness.fetch_and(!bits, Ordering::SeqCst);
+        self.i.token.schedule_read(&self.i.handle)
     }
 
     /// Indicates to this source of events that the corresponding I/O object is
@@ -248,14 +254,14 @@ impl<E> PollEvented<E> {
     /// task.
     pub fn need_write(&self) {
         let bits = super::ready2usize(Ready::writable());
-        self.readiness.fetch_and(!bits, Ordering::SeqCst);
-        self.token.schedule_write(&self.handle)
+        self.i.readiness.fetch_and(!bits, Ordering::SeqCst);
+        self.i.token.schedule_write(&self.i.handle)
     }
 
     /// Returns a reference to the event loop handle that this readiness stream
     /// is associated with.
     pub fn remote(&self) -> &Remote {
-        &self.handle
+        &self.i.handle
     }
 
     /// Returns a shared reference to the underlying I/O object this readiness
@@ -268,6 +274,11 @@ impl<E> PollEvented<E> {
     /// stream is wrapping.
     pub fn get_mut(&mut self) -> &mut E {
         &mut self.io
+    }
+
+    /// Consumes the `PollEvented` and returns the underlying I/O object
+    pub fn into_io(self) -> E {
+        self.io
     }
 }
 
@@ -402,7 +413,7 @@ fn is_wouldblock<T>(r: &io::Result<T>) -> bool {
     }
 }
 
-impl<E> Drop for PollEvented<E> {
+impl Drop for PollEventedInner {
     fn drop(&mut self) {
         self.token.drop_source(&self.handle);
     }
