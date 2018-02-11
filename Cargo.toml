@@ -19,7 +19,7 @@ appveyor = { repository = "alexcrichton/tokio-core" }
 [dependencies]
 bytes = "0.4"
 log = "0.4"
-mio = { git = "https://github.com/carllerche/mio", rev = "726b1f3078e79e69c3961f8af32e76e06c49a3f2" }
+mio = "0.6.13"
 scoped-tls = "0.1.0"
 slab = "0.4"
 iovec = "0.1"

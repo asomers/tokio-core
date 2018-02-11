@@ -156,9 +156,9 @@ impl TcpListener {
     ///   `addr` is an IPv4 address then all sockets accepted will be IPv4 as
     ///   well (same for IPv6).
     pub fn from_listener(listener: net::TcpListener,
-                         addr: &SocketAddr,
+                         _: &SocketAddr,
                          handle: &Handle) -> io::Result<TcpListener> {
-        let l = try!(mio::net::TcpListener::from_listener(listener, addr));
+        let l = try!(mio::net::TcpListener::from_std(listener));
         TcpListener::new(l, handle)
     }
 
